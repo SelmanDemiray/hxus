@@ -5,61 +5,54 @@ import json
 import h5py
 
 class EncoderDecoderNN:
-    def __init__(self, vocab_size, embedding_dim=128, hidden_dim=256):
+    def __init__(self, vocab_size, embedding_dim=128, hidden_dim=256, xp=np):
+        self.xp = xp
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
-        
-        # Initialize weights
-        # Encoder weights
-        self.encoder_embed = np.random.randn(vocab_size, embedding_dim) * 0.1
-        self.encoder_Wxh = np.random.randn(embedding_dim, hidden_dim) * 0.1
-        self.encoder_Whh = np.random.randn(hidden_dim, hidden_dim) * 0.1
-        self.encoder_bh = np.zeros((1, hidden_dim))
-        
-        # Decoder weights
-        self.decoder_embed = np.random.randn(vocab_size, embedding_dim) * 0.1
-        self.decoder_Wxh = np.random.randn(embedding_dim, hidden_dim) * 0.1
-        self.decoder_Whh = np.random.randn(hidden_dim, hidden_dim) * 0.1
-        self.decoder_bh = np.zeros((1, hidden_dim))
-        self.decoder_Why = np.random.randn(hidden_dim, vocab_size) * 0.1
-        self.decoder_by = np.zeros((1, vocab_size))
+
+        # Use xp for arrays
+        self.encoder_embed = xp.random.randn(vocab_size, embedding_dim) * 0.1
+        self.encoder_Wxh = xp.random.randn(embedding_dim, hidden_dim) * 0.1
+        self.encoder_Whh = xp.random.randn(hidden_dim, hidden_dim) * 0.1
+        self.encoder_bh = xp.zeros((1, hidden_dim))
+
+        self.decoder_embed = xp.random.randn(vocab_size, embedding_dim) * 0.1
+        self.decoder_Wxh = xp.random.randn(embedding_dim, hidden_dim) * 0.1
+        self.decoder_Whh = xp.random.randn(hidden_dim, hidden_dim) * 0.1
+        self.decoder_bh = xp.zeros((1, hidden_dim))
+        self.decoder_Why = xp.random.randn(hidden_dim, vocab_size) * 0.1
+        self.decoder_by = xp.zeros((1, vocab_size))
     
     def sigmoid(self, x):
         """Sigmoid activation function"""
-        return 1 / (1 + np.exp(-np.clip(x, -15, 15)))
+        return 1 / (1 + self.xp.exp(-self.xp.clip(x, -15, 15)))
     
     def softmax(self, x):
         """Softmax activation function"""
-        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
-        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
+        exp_x = self.xp.exp(x - self.xp.max(x, axis=1, keepdims=True))
+        return exp_x / self.xp.sum(exp_x, axis=1, keepdims=True)
     
     def forward_pass(self, encoder_inputs, decoder_inputs):
-        """
-        Forward pass through the encoder-decoder network
-        encoder_inputs: [batch_size, seq_len] - indices of input words
-        decoder_inputs: [batch_size, seq_len] - indices of decoder input words
-        """
         batch_size = encoder_inputs.shape[0]
         encoder_seq_len = encoder_inputs.shape[1]
         decoder_seq_len = decoder_inputs.shape[1]
         
         # Initialize hidden states and outputs
-        encoder_hidden = np.zeros((batch_size, self.hidden_dim))
-        decoder_hidden = np.zeros((batch_size, self.hidden_dim))
-        decoder_outputs = np.zeros((batch_size, decoder_seq_len, self.vocab_size))
+        encoder_hidden = self.xp.zeros((batch_size, self.hidden_dim))
+        decoder_hidden = self.xp.zeros((batch_size, self.hidden_dim))
+        decoder_outputs = self.xp.zeros((batch_size, decoder_seq_len, self.vocab_size))
         
         # Encoder forward pass
         for t in range(encoder_seq_len):
             # One-hot encode inputs
-            x_t = np.zeros((batch_size, self.vocab_size))
+            x_t = self.xp.zeros((batch_size, self.vocab_size))
             for i in range(batch_size):
-                if encoder_inputs[i, t] > 0:  # Skip padding
-                    x_t[i, encoder_inputs[i, t]] = 1
-            
+                idx = int(encoder_inputs[i, t])
+                if idx > 0:  # Skip padding
+                    x_t[i, idx] = 1
             # Embedding lookup
             embed_t = x_t @ self.encoder_embed
-            
             # Update hidden state
             encoder_hidden = self.sigmoid(
                 embed_t @ self.encoder_Wxh + 
@@ -73,10 +66,11 @@ class EncoderDecoderNN:
         # Decoder forward pass
         for t in range(decoder_seq_len):
             # One-hot encode inputs
-            x_t = np.zeros((batch_size, self.vocab_size))
+            x_t = self.xp.zeros((batch_size, self.vocab_size))
             for i in range(batch_size):
-                if decoder_inputs[i, t] > 0:  # Skip padding
-                    x_t[i, decoder_inputs[i, t]] = 1
+                idx = int(decoder_inputs[i, t])
+                if idx > 0:  # Skip padding
+                    x_t[i, idx] = 1
             
             # Embedding lookup
             embed_t = x_t @ self.decoder_embed
@@ -97,40 +91,34 @@ class EncoderDecoderNN:
     
     def backward_pass(self, encoder_inputs, decoder_inputs, decoder_targets, decoder_outputs, 
                       encoder_hidden, decoder_hidden, learning_rate=0.01):
-        """
-        Backward pass through the network
-        encoder_inputs: [batch_size, seq_len] - indices of input words
-        decoder_inputs: [batch_size, seq_len] - indices of decoder input words
-        decoder_targets: [batch_size, seq_len] - indices of target words
-        decoder_outputs: [batch_size, seq_len, vocab_size] - softmax outputs
-        """
+        xp = self.xp
         batch_size = encoder_inputs.shape[0]
         encoder_seq_len = encoder_inputs.shape[1]
         decoder_seq_len = decoder_inputs.shape[1]
         
         # Initialize gradients
-        dencoder_embed = np.zeros_like(self.encoder_embed)
-        dencoder_Wxh = np.zeros_like(self.encoder_Wxh)
-        dencoder_Whh = np.zeros_like(self.encoder_Whh)
-        dencoder_bh = np.zeros_like(self.encoder_bh)
+        dencoder_embed = xp.zeros_like(self.encoder_embed)
+        dencoder_Wxh = xp.zeros_like(self.encoder_Wxh)
+        dencoder_Whh = xp.zeros_like(self.encoder_Whh)
+        dencoder_bh = xp.zeros_like(self.encoder_bh)
         
-        ddecoder_embed = np.zeros_like(self.decoder_embed)
-        ddecoder_Wxh = np.zeros_like(self.decoder_Wxh)
-        ddecoder_Whh = np.zeros_like(self.decoder_Whh)
-        ddecoder_bh = np.zeros_like(self.decoder_bh)
-        ddecoder_Why = np.zeros_like(self.decoder_Why)
-        ddecoder_by = np.zeros_like(self.decoder_by)
+        ddecoder_embed = xp.zeros_like(self.decoder_embed)
+        ddecoder_Wxh = xp.zeros_like(self.decoder_Wxh)
+        ddecoder_Whh = xp.zeros_like(self.decoder_Whh)
+        ddecoder_bh = xp.zeros_like(self.decoder_bh)
+        ddecoder_Why = xp.zeros_like(self.decoder_Why)
+        ddecoder_by = xp.zeros_like(self.decoder_by)
         
         # Compute loss
         loss = 0
         for t in range(decoder_seq_len):
             for i in range(batch_size):
                 if decoder_targets[i, t] > 0:  # Skip padding
-                    loss -= np.log(decoder_outputs[i, t, decoder_targets[i, t]] + 1e-10)
+                    loss -= xp.log(decoder_outputs[i, t, int(decoder_targets[i, t])] + 1e-10)
         loss /= batch_size
         
         # Backward pass through decoder
-        dh_next = np.zeros((batch_size, self.hidden_dim))
+        dh_next = xp.zeros((batch_size, self.hidden_dim))
         
         for t in reversed(range(decoder_seq_len)):
             # Gradient of the softmax output
@@ -138,38 +126,38 @@ class EncoderDecoderNN:
             for i in range(batch_size):
                 if decoder_targets[i, t] > 0:  # Skip padding
                     dy[i, decoder_targets[i, t]] -= 1
-            
+
             # Gradient of Why and by
             ddecoder_Why += dh_next.T @ dy
-            ddecoder_by += np.sum(dy, axis=0, keepdims=True)
-            
+            ddecoder_by += xp.sum(dy, axis=0, keepdims=True)
+
             # Gradient of hidden state
             dh = dy @ self.decoder_Why.T + dh_next
-            
+
             # Gate gradients
             dh_raw = (1 - decoder_hidden) * decoder_hidden * dh
-            
+
             # Gradient of Whh, Wxh, and bh
-            ddecoder_bh += np.sum(dh_raw, axis=0, keepdims=True)
-            
+            ddecoder_bh += xp.sum(dh_raw, axis=0, keepdims=True)
+
             # One-hot encode inputs
-            x_t = np.zeros((batch_size, self.vocab_size))
+            x_t = xp.zeros((batch_size, self.vocab_size))
             for i in range(batch_size):
                 if decoder_inputs[i, t] > 0:  # Skip padding
                     x_t[i, decoder_inputs[i, t]] = 1
-            
+
             # Embedding lookup
             embed_t = x_t @ self.decoder_embed
-            
+
             ddecoder_Wxh += embed_t.T @ dh_raw
             ddecoder_Whh += decoder_hidden.T @ dh_raw
-            
+
             # Gradient of embedding
             dembed = dh_raw @ self.decoder_Wxh.T
             for i in range(batch_size):
                 if decoder_inputs[i, t] > 0:  # Skip padding
                     ddecoder_embed[decoder_inputs[i, t]] += dembed[i]
-            
+
             # Next hidden state gradient
             if t > 0:
                 dh_next = dh_raw @ self.decoder_Whh.T

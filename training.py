@@ -14,11 +14,9 @@ def generate_model_name():
 def train_model(encoder_inputs, decoder_inputs, decoder_targets, 
                 model, epochs=10, batch_size=32, learning_rate=0.01,
                 save_dir='models', save_every=5):
-    """
-    Train the encoder-decoder model
-    """
+    xp = model.xp
     num_samples = encoder_inputs.shape[0]
-    num_batches = int(np.ceil(num_samples / batch_size))
+    num_batches = int(xp.ceil(num_samples / batch_size))
 
     # Generate unique model name and directories
     model_name = generate_model_name()

@@ -31,11 +31,25 @@ def main():
                        help='Hidden layer dimension')
     parser.add_argument('--learning_rate', type=float, default=0.01,
                        help='Learning rate')
+    parser.add_argument('--use_gpu', action='store_true',
+                       help='Use GPU acceleration with CuPy for training')
     
     args = parser.parse_args()
     
     if args.mode == 'train':
         print("Starting training mode...")
+
+        # Select array module
+        if args.use_gpu:
+            try:
+                import cupy as cp
+                xp = cp
+                print("Using CuPy for GPU acceleration.")
+            except ImportError:
+                print("CuPy not installed. Falling back to NumPy.")
+                xp = np
+        else:
+            xp = np
         
         # Initialize data processor
         processor = DataProcessor(max_sequence_length=20)
@@ -55,6 +69,12 @@ def main():
         
         # Prepare data for training
         encoder_inputs, decoder_inputs, decoder_targets = processor.prepare_data(questions, answers)
+
+        # Convert to CuPy arrays if using GPU
+        if args.use_gpu and xp.__name__ == "cupy":
+            encoder_inputs = xp.array(encoder_inputs)
+            decoder_inputs = xp.array(decoder_inputs)
+            decoder_targets = xp.array(decoder_targets)
         
         # Save the processor
         os.makedirs(os.path.dirname(args.processor_path), exist_ok=True)
@@ -64,7 +84,8 @@ def main():
         model = EncoderDecoderNN(
             vocab_size=processor.vocab_size,
             embedding_dim=args.embedding_dim,
-            hidden_dim=args.hidden_dim
+            hidden_dim=args.hidden_dim,
+            xp=xp
         )
         
         # Train model
