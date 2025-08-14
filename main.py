@@ -12,6 +12,11 @@ def main():
                        help='Mode: train the model or chat with trained model')
     parser.add_argument('--data_path', type=str, default=None,
                        help='Path to conversation data (if not provided, sample data will be used)')
+    parser.add_argument('--dataset_type', type=str, default='all', 
+                       choices=['all', 'simple', 'cornell', 'daily_dialog', 'persona_chat'],
+                       help='Type of dataset to use for training (default: all - uses ALL available datasets)')
+    parser.add_argument('--max_conversations', type=int, default=3000,
+                       help='Maximum number of conversations to load per dataset (default: 3000)')
     parser.add_argument('--model_path', type=str, default='models/model.pkl',
                        help='Path to save/load model')
     parser.add_argument('--processor_path', type=str, default='models/processor.pkl',
@@ -38,11 +43,13 @@ def main():
         # Load data
         if args.data_path:
             # TODO: Implement loading custom data format
-            # For now, we'll use sample data
-            print(f"Custom data loading not implemented yet. Using sample data instead.")
-            questions, answers = processor.load_sample_data()
+            # For now, we'll use the specified dataset type
+            print(f"Custom data loading not implemented yet. Using {args.dataset_type} dataset instead.")
+            questions, answers = processor.load_dataset(args.dataset_type, args.max_conversations)
         else:
-            questions, answers = processor.load_sample_data()
+            # Use the new dataset loading method instead of load_sample_data()
+            print(f"Loading {args.dataset_type} dataset...")
+            questions, answers = processor.load_dataset(args.dataset_type, args.max_conversations)
             
         print(f"Loaded {len(questions)} conversation pairs")
         

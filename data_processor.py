@@ -1,7 +1,12 @@
-import numpy as np
+import numpy as np 
 import re
 import os
 import pickle
+import requests
+import zipfile
+import json
+from urllib.parse import urlparse
+import pandas as pd
 
 class DataProcessor:
     def __init__(self, max_sequence_length=20):
@@ -9,10 +14,12 @@ class DataProcessor:
         self.idx_to_word = {0: '<PAD>', 1: '<START>', 2: '<END>', 3: '<UNK>'}
         self.vocab_size = 4
         self.max_sequence_length = max_sequence_length
+        self.data_dir = "datasets"
+        os.makedirs(self.data_dir, exist_ok=True)
     
     def preprocess_text(self, text):
         """Clean and tokenize text"""
-        text = text.lower()
+        text = str(text).lower()
         text = re.sub(r'[^\w\s]', '', text)
         return text.split()
     
@@ -67,6 +74,485 @@ class DataProcessor:
         
         return np.array(encoder_inputs), np.array(decoder_inputs), np.array(decoder_targets)
     
+    def download_file(self, url, filename):
+        """Download a file from URL"""
+        filepath = os.path.join(self.data_dir, filename)
+        if os.path.exists(filepath):
+            print(f"File {filename} already exists, skipping download")
+            return filepath
+            
+        print(f"Downloading {filename}...")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        with open(filepath, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        print(f"Downloaded {filename}")
+        return filepath
+    
+    def load_cornell_movie_dialogs(self, max_conversations=1000):
+        """
+        Load Cornell Movie-Dialogs Corpus
+        This dataset is free for research use and contains fictional movie conversations
+        """
+        # Download the dataset
+        url = "https://www.cs.cornell.edu/~cristian/data/cornell_movie_dialogs_corpus.zip"
+        zip_path = self.download_file(url, "cornell_movie_dialogs.zip")
+        
+        # Extract the zip file
+        extract_path = os.path.join(self.data_dir, "cornell_movie_dialogs")
+        if not os.path.exists(extract_path):
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+            print("Extracted Cornell Movie Dialogs dataset")
+        
+        # Load movie lines and conversations
+        lines_file = os.path.join(extract_path, "cornell movie-dialogs corpus", "movie_lines.txt")
+        conversations_file = os.path.join(extract_path, "cornell movie-dialogs corpus", "movie_conversations.txt")
+        
+        # Parse movie lines
+        id2line = {}
+        with open(lines_file, 'r', encoding='iso-8859-1') as f:
+            for line in f:
+                parts = line.split(' +++$+++ ')
+                if len(parts) >= 5:
+                    id2line[parts[0]] = parts[4].strip()
+        
+        # Parse conversations
+        questions = []
+        answers = []
+        conversation_count = 0
+        
+        with open(conversations_file, 'r', encoding='iso-8859-1') as f:
+            for line in f:
+                if conversation_count >= max_conversations:
+                    break
+                    
+                parts = line.split(' +++$+++ ')
+                if len(parts) >= 4:
+                    # Extract line IDs from the conversation
+                    line_ids = eval(parts[3])  # This is a Python list in string format
+                    
+                    # Create question-answer pairs from consecutive lines
+                    for i in range(len(line_ids) - 1):
+                        if line_ids[i] in id2line and line_ids[i+1] in id2line:
+                            question = id2line[line_ids[i]].strip()
+                            answer = id2line[line_ids[i+1]].strip()
+                            
+                            # Filter out very short or very long responses
+                            if 3 <= len(question.split()) <= 20 and 3 <= len(answer.split()) <= 20:
+                                questions.append(question)
+                                answers.append(answer)
+                
+                conversation_count += 1
+        
+        print(f"Loaded {len(questions)} question-answer pairs from Cornell Movie Dialogs")
+        return questions, answers
+    
+    def load_simple_qa_dataset(self, max_pairs=500):
+        """
+        Load a simple QA dataset - creates a basic conversational dataset
+        This simulates what would be a free, open dataset format
+        """
+        questions = []
+        answers = []
+        
+        # Basic conversational patterns (copyright-free, simple responses)
+        qa_pairs = [
+            ("hello", "hi there"),
+            ("how are you", "i am doing well thank you"),
+            ("what is your name", "i am a chatbot"),
+            ("goodbye", "goodbye have a nice day"),
+            ("thank you", "you are welcome"),
+            ("what can you do", "i can chat with you"),
+            ("help", "how can i help you"),
+            ("yes", "okay great"),
+            ("no", "i understand"),
+            ("maybe", "that sounds reasonable"),
+            ("tell me about yourself", "i am an ai assistant here to help"),
+            ("what is the weather", "i cannot check the weather"),
+            ("what time is it", "i do not have access to the current time"),
+            ("where are you from", "i am a computer program"),
+            ("do you like music", "i cannot listen to music but many people enjoy it"),
+            ("what is your favorite color", "i do not have preferences"),
+            ("can you help me", "yes i will try to help"),
+            ("i need assistance", "what kind of assistance do you need"),
+            ("this is confusing", "let me try to clarify"),
+            ("i do not understand", "please let me explain"),
+        ]
+        
+        # Expand with variations
+        for q, a in qa_pairs:
+            questions.append(q)
+            answers.append(a)
+            
+            # Add some variations
+            questions.append(q + " please")
+            answers.append(a)
+            
+            questions.append("can you " + q)
+            answers.append("sure " + a)
+        
+        # Add more conversational data
+        for i in range(min(max_pairs - len(questions), 100)):
+            questions.append(f"question number {i}")
+            answers.append(f"this is answer number {i}")
+        
+        return questions[:max_pairs], answers[:max_pairs]
+    
+    def load_huggingface_dataset(self, dataset_name="daily_dialog", max_conversations=1000):
+        """
+        Load dataset from Hugging Face (requires datasets library)
+        Install with: pip install datasets
+        """
+        try:
+            from datasets import load_dataset
+            
+            print(f"Loading {dataset_name} from Hugging Face...")
+            
+            if dataset_name == "daily_dialog":
+                dataset = load_dataset("daily_dialog")
+                train_data = dataset['train']
+                
+                questions = []
+                answers = []
+                
+                for i, conversation in enumerate(train_data['dialog'][:max_conversations]):
+                    # Create Q&A pairs from consecutive turns in dialog
+                    for j in range(len(conversation) - 1):
+                        question = conversation[j].strip()
+                        answer = conversation[j + 1].strip()
+                        
+                        if len(question.split()) > 2 and len(answer.split()) > 2:
+                            questions.append(question)
+                            answers.append(answer)
+                
+                print(f"Loaded {len(questions)} pairs from {dataset_name}")
+                return questions, answers
+                
+            elif dataset_name == "persona_chat":
+                dataset = load_dataset("persona_chat")
+                train_data = dataset['train']
+                
+                questions = []
+                answers = []
+                
+                for i, example in enumerate(train_data[:max_conversations]):
+                    history = example['history']
+                    candidates = example['candidates']
+                    
+                    if history and candidates:
+                        # Use the last message in history as question
+                        question = history[-1] if history else ""
+                        # Use the first candidate as answer
+                        answer = candidates[0] if candidates else ""
+                        
+                        if len(question.split()) > 2 and len(answer.split()) > 2:
+                            questions.append(question)
+                            answers.append(answer)
+                
+                print(f"Loaded {len(questions)} pairs from {dataset_name}")
+                return questions, answers
+                
+        except ImportError:
+            print("Hugging Face datasets library not installed. Install with: pip install datasets")
+            print("Using simple QA dataset instead...")
+            return self.load_simple_qa_dataset(max_conversations)
+        except Exception as e:
+            print(f"Error loading {dataset_name}: {e}")
+            print("Using simple QA dataset instead...")
+            return self.load_simple_qa_dataset(max_conversations)
+    
+    def load_all_datasets(self, max_conversations_per_dataset=2000):
+        """
+        Load ALL available copyright-free datasets and combine them
+        
+        Args:
+            max_conversations_per_dataset (int): Maximum conversations per individual dataset
+        """
+        print("Loading ALL available copyright-free datasets...")
+        
+        all_questions = []
+        all_answers = []
+        
+        # 1. Load Simple QA Dataset
+        print("1/6: Loading Simple QA patterns...")
+        try:
+            q, a = self.load_simple_qa_dataset(max_conversations_per_dataset)
+            all_questions.extend(q)
+            all_answers.extend(a)
+            print(f"   Added {len(q)} pairs from Simple QA")
+        except Exception as e:
+            print(f"   Failed to load Simple QA: {e}")
+        
+        # 2. Load Cornell Movie Dialogs
+        print("2/6: Loading Cornell Movie Dialogs...")
+        try:
+            q, a = self.load_cornell_movie_dialogs(max_conversations_per_dataset)
+            all_questions.extend(q)
+            all_answers.extend(a)
+            print(f"   Added {len(q)} pairs from Cornell Movie Dialogs")
+        except Exception as e:
+            print(f"   Failed to load Cornell Movie Dialogs: {e}")
+        
+        # 3. Load Daily Dialog from Hugging Face
+        print("3/6: Loading Daily Dialog...")
+        try:
+            q, a = self.load_huggingface_dataset("daily_dialog", max_conversations_per_dataset)
+            all_questions.extend(q)
+            all_answers.extend(a)
+            print(f"   Added {len(q)} pairs from Daily Dialog")
+        except Exception as e:
+            print(f"   Failed to load Daily Dialog: {e}")
+        
+        # 4. Load PersonaChat from Hugging Face
+        print("4/6: Loading PersonaChat...")
+        try:
+            q, a = self.load_huggingface_dataset("persona_chat", max_conversations_per_dataset)
+            all_questions.extend(q)
+            all_answers.extend(a)
+            print(f"   Added {len(q)} pairs from PersonaChat")
+        except Exception as e:
+            print(f"   Failed to load PersonaChat: {e}")
+        
+        # 5. Load additional Hugging Face datasets
+        print("5/6: Loading additional datasets...")
+        additional_datasets = [
+            "conv_ai_2", "empathetic_dialogues", "blended_skill_talk"
+        ]
+        
+        for dataset_name in additional_datasets:
+            try:
+                q, a = self.load_additional_hf_dataset(dataset_name, max_conversations_per_dataset // 3)
+                all_questions.extend(q)
+                all_answers.extend(a)
+                print(f"   Added {len(q)} pairs from {dataset_name}")
+            except Exception as e:
+                print(f"   Failed to load {dataset_name}: {e}")
+        
+        # 6. Load OpenSubtitles dataset
+        print("6/6: Loading OpenSubtitles dataset...")
+        try:
+            q, a = self.load_opensubtitles_dataset(max_conversations_per_dataset)
+            all_questions.extend(q)
+            all_answers.extend(a)
+            print(f"   Added {len(q)} pairs from OpenSubtitles")
+        except Exception as e:
+            print(f"   Failed to load OpenSubtitles: {e}")
+        
+        print(f"\nTOTAL: Loaded {len(all_questions)} question-answer pairs from all sources")
+        
+        # Remove duplicates while preserving order
+        unique_pairs = []
+        seen = set()
+        for q, a in zip(all_questions, all_answers):
+            pair_key = (q.lower().strip(), a.lower().strip())
+            if pair_key not in seen:
+                seen.add(pair_key)
+                unique_pairs.append((q, a))
+        
+        final_questions, final_answers = zip(*unique_pairs) if unique_pairs else ([], [])
+        final_questions, final_answers = list(final_questions), list(final_answers)
+        
+        print(f"After removing duplicates: {len(final_questions)} unique pairs")
+        
+        # Build vocabulary from all the loaded data
+        self.build_vocabulary(final_questions + final_answers)
+        
+        return final_questions, final_answers
+    
+    def load_additional_hf_dataset(self, dataset_name, max_conversations):
+        """Load additional Hugging Face datasets"""
+        try:
+            from datasets import load_dataset
+            
+            if dataset_name == "conv_ai_2":
+                dataset = load_dataset("conv_ai_2")
+                train_data = dataset['train']
+                questions, answers = [], []
+                
+                for i, example in enumerate(train_data[:max_conversations]):
+                    if 'dialog' in example:
+                        dialog = example['dialog']
+                        for j in range(len(dialog) - 1):
+                            if len(dialog[j].split()) > 2 and len(dialog[j+1].split()) > 2:
+                                questions.append(dialog[j])
+                                answers.append(dialog[j+1])
+                
+                return questions, answers
+                
+            elif dataset_name == "empathetic_dialogues":
+                dataset = load_dataset("empathetic_dialogues")
+                train_data = dataset['train']
+                questions, answers = [], []
+                
+                for i, example in enumerate(train_data[:max_conversations]):
+                    if 'prompt' in example and 'utterance' in example:
+                        prompt = str(example['prompt']).strip()
+                        utterance = str(example['utterance']).strip()
+                        if len(prompt.split()) > 2 and len(utterance.split()) > 2:
+                            questions.append(prompt)
+                            answers.append(utterance)
+                
+                return questions, answers
+                
+            elif dataset_name == "blended_skill_talk":
+                dataset = load_dataset("blended_skill_talk")
+                train_data = dataset['train']
+                questions, answers = [], []
+                
+                for i, example in enumerate(train_data[:max_conversations]):
+                    if 'previous_utterance' in example and 'free_message' in example:
+                        prev = str(example['previous_utterance']).strip()
+                        free = str(example['free_message']).strip()
+                        if len(prev.split()) > 2 and len(free.split()) > 2:
+                            questions.append(prev)
+                            answers.append(free)
+                
+                return questions, answers
+            
+        except Exception as e:
+            print(f"Error loading {dataset_name}: {e}")
+            return [], []
+        
+        return [], []
+    
+    def load_opensubtitles_dataset(self, max_conversations):
+        """
+        Load OpenSubtitles conversational data
+        This is a massive dataset of movie/TV subtitles converted to conversations
+        """
+        try:
+            from datasets import load_dataset
+            
+            # OpenSubtitles is available through Hugging Face
+            dataset = load_dataset("open_subtitles", "en", split='train', streaming=True)
+            
+            questions = []
+            answers = []
+            count = 0
+            
+            for example in dataset:
+                if count >= max_conversations:
+                    break
+                    
+                if 'translation' in example:
+                    lines = example['translation']['en']
+                    if isinstance(lines, list) and len(lines) >= 2:
+                        for i in range(len(lines) - 1):
+                            q = str(lines[i]).strip()
+                            a = str(lines[i+1]).strip()
+                            
+                            if (3 <= len(q.split()) <= 25 and 
+                                3 <= len(a.split()) <= 25 and 
+                                q != a):
+                                questions.append(q)
+                                answers.append(a)
+                                count += 1
+                                
+                                if count >= max_conversations:
+                                    break
+            
+            return questions, answers
+            
+        except Exception as e:
+            print(f"OpenSubtitles not available: {e}")
+            # Fallback: create more synthetic data
+            return self.generate_extended_qa_data(max_conversations)
+    
+    def generate_extended_qa_data(self, max_pairs):
+        """Generate extended Q&A data as fallback"""
+        questions = []
+        answers = []
+        
+        # Extended conversational patterns
+        base_patterns = [
+            ("hello", "hi there how are you doing"),
+            ("good morning", "good morning have a great day"),
+            ("how are you", "i am doing well thank you for asking"),
+            ("what is your name", "i am an ai assistant here to help"),
+            ("where are you from", "i am a computer program created to assist"),
+            ("what can you do", "i can help answer questions and have conversations"),
+            ("thank you", "you are very welcome"),
+            ("goodbye", "goodbye take care"),
+            ("help me", "i would be happy to help you"),
+            ("tell me something interesting", "did you know that octopuses have three hearts"),
+            ("what is the weather like", "i cannot check the weather but hope it is nice"),
+            ("do you like music", "i think music is a wonderful form of expression"),
+            ("what is your favorite book", "i enjoy many different types of literature"),
+            ("can you tell me a story", "once upon a time in a digital world there lived an ai"),
+            ("what makes you happy", "helping people and having good conversations"),
+            ("do you dream", "i process information but do not dream like humans"),
+            ("what is love", "love is a complex emotion that connects people"),
+            ("what is the meaning of life", "that is a deep philosophical question"),
+            ("are you intelligent", "i try to be helpful and provide good responses"),
+            ("what do you think about", "i process language and try to understand context"),
+        ]
+        
+        # Generate variations and extensions
+        for base_q, base_a in base_patterns:
+            # Add base pair
+            questions.append(base_q)
+            answers.append(base_a)
+            
+            # Add variations
+            variations = [
+                (f"can you {base_q}", f"sure {base_a}"),
+                (f"please {base_q}", f"of course {base_a}"),
+                (f"{base_q} please", base_a),
+                (f"i want to know {base_q}", f"well {base_a}"),
+                (f"tell me {base_q}", base_a),
+            ]
+            
+            for var_q, var_a in variations:
+                if len(questions) < max_pairs:
+                    questions.append(var_q)
+                    answers.append(var_a)
+        
+        # Fill remaining with numbered pairs
+        for i in range(len(questions), max_pairs):
+            questions.append(f"question number {i}")
+            answers.append(f"this is response number {i} to help with training")
+        
+        return questions[:max_pairs], answers[:max_pairs]
+
+    def load_dataset(self, dataset_type="all", max_conversations=2000):
+        """
+        Main method to load datasets
+        
+        Args:
+            dataset_type (str): Type of dataset to load
+                - "all": Load ALL available datasets (recommended)
+                - "simple": Basic Q&A patterns
+                - "cornell": Cornell Movie Dialogs
+                - "daily_dialog": DailyDialog from Hugging Face
+                - "persona_chat": PersonaChat from Hugging Face
+            max_conversations (int): Maximum number of conversations per dataset
+        """
+        if dataset_type == "all":
+            return self.load_all_datasets(max_conversations)
+        
+        print(f"Loading {dataset_type} dataset...")
+        
+        if dataset_type == "simple":
+            questions, answers = self.load_simple_qa_dataset(max_conversations)
+        elif dataset_type == "cornell":
+            questions, answers = self.load_cornell_movie_dialogs(max_conversations)
+        elif dataset_type == "daily_dialog":
+            questions, answers = self.load_huggingface_dataset("daily_dialog", max_conversations)
+        elif dataset_type == "persona_chat":
+            questions, answers = self.load_huggingface_dataset("persona_chat", max_conversations)
+        else:
+            print(f"Unknown dataset type: {dataset_type}. Loading all datasets.")
+            return self.load_all_datasets(max_conversations)
+        
+        # Build vocabulary from the loaded data
+        self.build_vocabulary(questions + answers)
+        
+        return questions, answers
+    
     def save_processor(self, path):
         """Save data processor to file"""
         with open(path, 'wb') as f:
@@ -90,320 +576,35 @@ class DataProcessor:
             processor.max_sequence_length = data['max_sequence_length']
         print(f"Data processor loaded from {path}")
         return processor
+
+# Usage example:
+if __name__ == "__main__":
+    # Initialize the processor
+    processor = DataProcessor(max_sequence_length=25)
     
-    def load_sample_data(self):
-        """Load sample conversation data for testing"""
-        questions = [
-            "hello how are you",
-            "what is your name",
-            "how does this work",
-            "tell me a joke",
-            "what time is it",
-            "can you help me",
-            "where are you from",
-            "what can you do",
-            "how old are you",
-            "who created you",
-            "what is the weather today",
-            "do you like music",
-            "can you speak other languages",
-            "what is your favorite color",
-            "how do i reset my password",
-            "what is artificial intelligence",
-            "how do i contact support",
-            "can you recommend a book",
-            "what is your purpose",
-            "how do i update my profile",
-            "what languages do you speak",
-            "can you tell me a fun fact",
-            "how do i delete my account",
-            "what is machine learning",
-            "can you set a reminder for me",
-            "how do i change my email address",
-            "what is your favorite food",
-            "can you play games",
-            "how do i subscribe to the newsletter",
-            "what is deep learning",
-            "can you translate text",
-            "how do i log out",
-            "what is your favorite movie",
-            "can you tell me a story",
-            "how do i enable notifications",
-            "what is natural language processing",
-            "can you answer math questions",
-            "how do i recover my username",
-            "what is your favorite animal",
-            "can you send emails",
-            "how do i change my password",
-            # Additional training data
-            "how do i make a reservation",
-            "can you order food for me",
-            "what is the capital of france",
-            "how do i connect to wifi",
-            "can you tell me the news",
-            "how do i set an alarm",
-            "what is your favorite sport",
-            "can you check my schedule",
-            "how do i turn off notifications",
-            "can you tell me a riddle",
-            # More training data
-            "how do i book a flight",
-            "can you check the weather tomorrow",
-            "what is the meaning of life",
-            "how do i cancel my subscription",
-            "can you recommend a movie",
-            "how do i change my username",
-            "can you help me with homework",
-            "what is your favorite book",
-            "how do i set a timer",
-            "can you tell me a joke about computers",
-            # Even more training data
-            "how do i create an account",
-            "can you help me find a restaurant",
-            "what is the tallest mountain",
-            "how do i delete a message",
-            "can you tell me a fun story",
-            "how do i check my balance",
-            "what is the fastest animal",
-            "can you help me with directions",
-            "how do i update my app",
-            "can you tell me a science fact",
-            "how do i send a photo",
-            "can you help me with math homework",
-            "what is the largest ocean",
-            "how do i change my profile picture",
-            "can you tell me a joke about animals",
-            "how do i set my location",
-            "can you help me with my schedule",
-            "what is the smallest country",
-            "how do i block someone",
-            "can you tell me a historical fact",
-            # Even more data for training
-            "how do i check my email",
-            "can you help me with programming",
-            "what is the speed of light",
-            "how do i print a document",
-            "can you tell me a joke about robots",
-            "how do i find nearby hotels",
-            "can you help me with travel plans",
-            "what is the population of japan",
-            "how do i set up two factor authentication",
-            "can you tell me a joke about science",
-            "how do i change my notification settings",
-            "can you help me with my homework",
-            "what is the capital of germany",
-            "how do i add a new contact",
-            "can you tell me a joke about math",
-            "how do i check my internet speed",
-            "can you help me with a recipe",
-            "what is the largest planet",
-            "how do i update my billing information",
-            "can you tell me a joke about computers",
-            "how do i create a backup",
-            "can you help me with my calendar",
-            "what is the capital of italy",
-            "how do i delete my browsing history",
-            "can you tell me a joke about food",
-            # Even more data for training (added)
-            "how do i reset my device",
-            "can you help me with coding",
-            "what is the tallest building",
-            "how do i change my language settings",
-            "can you tell me a joke about animals",
-            "how do i check my notifications",
-            "can you help me with science homework",
-            "what is the capital of spain",
-            "how do i set a profile picture",
-            "can you tell me a joke about sports",
-            "how do i update my contact information",
-            "can you help me with geography homework",
-            "what is the largest desert",
-            "how do i change my theme",
-            "can you tell me a joke about school",
-            "how do i check my reminders",
-            "can you help me with history homework",
-            "what is the smallest planet",
-            "how do i block notifications",
-            "can you tell me a joke about teachers",
-            # Even more data for training (newly added)
-            "how do i check my flight status",
-            "can you help me with chemistry homework",
-            "what is the capital of canada",
-            "how do i set a meeting reminder",
-            "can you tell me a joke about engineers",
-            "how do i find a nearby pharmacy",
-            "can you help me with my resume",
-            "what is the population of australia",
-            "how do i enable dark mode",
-            "can you tell me a joke about doctors",
-            "how do i change my privacy settings",
-            "can you help me with my shopping list",
-            "what is the capital of brazil",
-            "how do i add an event to my calendar",
-            "can you tell me a joke about lawyers",
-            "how do i check my device storage",
-            "can you help me with my travel itinerary",
-            "what is the largest continent",
-            "how do i update my payment method",
-            "can you tell me a joke about programmers"
-        ]
-
-        answers = [
-            "i am doing well thank you",
-            "my name is chat bot",
-            "you ask questions and i try to answer them",
-            "why did the chicken cross the road to get to the other side",
-            "sorry i do not have access to the current time",
-            "yes i can help you with your questions",
-            "i am a virtual assistant created by developers",
-            "i can answer questions and help with information",
-            "i do not have an age i am a program",
-            "i was created by a team of engineers",
-            "sorry i cannot check the weather",
-            "yes i enjoy listening to music",
-            "i can understand and reply in several languages",
-            "i do not have preferences as i am an ai",
-            "to reset your password follow the instructions on the website",
-            "artificial intelligence is the simulation of human intelligence by machines",
-            "you can contact support through the help section on the website",
-            "i recommend reading to kill a mockingbird",
-            "my purpose is to assist and provide information",
-            "to update your profile go to the settings page",
-            "i can speak english and understand several other languages",
-            "here is a fun fact honey never spoils",
-            "to delete your account follow the instructions in your account settings",
-            "machine learning is a field of ai that enables computers to learn from data",
-            "i can set reminders if you tell me the details",
-            "to change your email address go to your account settings",
-            "i do not eat food as i am a virtual assistant",
-            "yes i can play simple games with you",
-            "to subscribe to the newsletter visit the subscription page",
-            "deep learning is a subset of machine learning using neural networks",
-            "yes i can translate text between several languages",
-            "to log out click the log out button in your account menu",
-            "i do not watch movies but i know many popular ones",
-            "sure here is a short story once upon a time there was a curious user",
-            "to enable notifications go to your settings and turn them on",
-            "natural language processing is a field of ai focused on understanding human language",
-            "yes i can help with math questions just ask",
-            "to recover your username use the forgot username option on the login page",
-            "i do not have a favorite animal but i know many facts about animals",
-            "yes i can help you send emails if you provide the details",
-            "to change your password go to your account settings and follow the instructions",
-            # Additional training data answers
-            "to make a reservation please provide the details and i will assist you",
-            "i can help you order food if you tell me what you would like",
-            "the capital of france is paris",
-            "to connect to wifi go to your device settings and select a network",
-            "here is the latest news i found online",
-            "to set an alarm tell me the time you want to wake up",
-            "i do not have a favorite sport but i know many sports facts",
-            "i can check your schedule if you give me access to your calendar",
-            "to turn off notifications go to your settings and disable them",
-            "here is a riddle what has keys but cant open locks a piano",
-            # More training data answers
-            "to book a flight please provide your destination and dates",
-            "the weather tomorrow is expected to be sunny",
-            "the meaning of life is a philosophical question with many answers",
-            "to cancel your subscription go to your account settings and select cancel",
-            "i recommend watching inception",
-            "to change your username go to your profile settings",
-            "yes i can help you with your homework just tell me the subject",
-            "my favorite book is pride and prejudice",
-            "to set a timer tell me the duration",
-            "here is a computer joke why do programmers prefer dark mode because light attracts bugs",
-            # Even more training data answers
-            "to create an account go to the sign up page and follow the instructions",
-            "i can help you find a restaurant if you tell me your location",
-            "the tallest mountain is mount everest",
-            "to delete a message select the message and choose delete",
-            "once upon a time there was a clever fox who loved stories",
-            "to check your balance log in to your account and view your dashboard",
-            "the fastest animal is the cheetah",
-            "i can help you with directions if you provide your destination",
-            "to update your app go to the app store and check for updates",
-            "here is a science fact water is made of hydrogen and oxygen",
-            "to send a photo select the photo and choose send",
-            "yes i can help you with math homework just tell me the problem",
-            "the largest ocean is the pacific ocean",
-            "to change your profile picture go to your profile and upload a new photo",
-            "here is a joke why did the cow become an astronaut to see the moooon",
-            "to set your location go to your settings and enable location services",
-            "i can help you organize your schedule if you give me your appointments",
-            "the smallest country is vatican city",
-            "to block someone go to their profile and select block",
-            "here is a historical fact the first computer was invented in the 1940s",
-            # Even more data for training answers
-            "to check your email open your email app or website",
-            "yes i can help you with programming just tell me your question",
-            "the speed of light is approximately three hundred thousand kilometers per second",
-            "to print a document select print from the file menu",
-            "here is a robot joke why did the robot go on vacation to recharge its batteries",
-            "to find nearby hotels use a maps app or website",
-            "i can help you with travel plans if you tell me your destination",
-            "the population of japan is over one hundred million",
-            "to set up two factor authentication go to your account security settings",
-            "here is a science joke why did the scientist install a knocker on his door to win the no bell prize",
-            "to change your notification settings go to your settings menu",
-            "yes i can help you with your homework just tell me the subject",
-            "the capital of germany is berlin",
-            "to add a new contact go to your contacts app and select add",
-            "here is a math joke why was the equal sign so humble because it knew it was not greater than or less than anyone else",
-            "to check your internet speed use an online speed test",
-            "i can help you with a recipe if you tell me what you want to cook",
-            "the largest planet is jupiter",
-            "to update your billing information go to your account settings",
-            "here is a computer joke why do computers get cold because they have windows",
-            "to create a backup use your device's backup feature",
-            "i can help you with your calendar if you give me access",
-            "the capital of italy is rome",
-            "to delete your browsing history go to your browser settings",
-            "here is a food joke why did the tomato turn red because it saw the salad dressing",
-            # Even more data for training answers (added)
-            "to reset your device go to your settings and select reset",
-            "yes i can help you with coding just tell me your question",
-            "the tallest building is burj khalifa",
-            "to change your language settings go to your settings and select language",
-            "here is an animal joke why did the cat sit on the computer to keep an eye on the mouse",
-            "to check your notifications open your notification panel",
-            "yes i can help you with science homework just tell me the topic",
-            "the capital of spain is madrid",
-            "to set a profile picture go to your profile and upload a photo",
-            "here is a sports joke why did the football team go to the bank to get their quarterback",
-            "to update your contact information go to your profile settings",
-            "yes i can help you with geography homework just tell me the question",
-            "the largest desert is the sahara",
-            "to change your theme go to your settings and select theme",
-            "here is a school joke why was the math book sad because it had too many problems",
-            "to check your reminders open your reminders app",
-            "yes i can help you with history homework just tell me the topic",
-            "the smallest planet is mercury",
-            "to block notifications go to your notification settings",
-            "here is a teacher joke why did the teacher wear sunglasses because her students were so bright",
-            # Even more data for training answers (newly added)
-            "to check your flight status visit your airline's website or app",
-            "yes i can help you with chemistry homework just tell me the topic",
-            "the capital of canada is ottawa",
-            "to set a meeting reminder tell me the date and time",
-            "here is an engineer joke why did the engineer cross the road to get to the other side of the equation",
-            "to find a nearby pharmacy use a maps app or website",
-            "i can help you with your resume if you provide your work experience",
-            "the population of australia is about twenty five million",
-            "to enable dark mode go to your settings and select dark mode",
-            "here is a doctor joke why did the doctor carry a red pen in case they needed to draw blood",
-            "to change your privacy settings go to your account settings",
-            "i can help you with your shopping list if you tell me what you need",
-            "the capital of brazil is brasilia",
-            "to add an event to your calendar tell me the details",
-            "here is a lawyer joke why did the lawyer wear a neck brace to help his case",
-            "to check your device storage go to your settings and select storage",
-            "i can help you with your travel itinerary if you provide your plans",
-            "the largest continent is asia",
-            "to update your payment method go to your account billing settings",
-            "here is a programmer joke why do programmers hate nature because it has too many bugs"
-        ]
-
-        # Build vocabulary from these samples
-        self.build_vocabulary(questions + answers)
-
-        return questions, answers
+    # Load ALL available datasets (recommended for maximum training data):
+    print("Loading ALL copyright-free datasets...")
+    questions, answers = processor.load_dataset("all", max_conversations=3000)
+    
+    # Alternative: Load specific datasets
+    # questions, answers = processor.load_dataset("simple", max_conversations=500)
+    # questions, answers = processor.load_dataset("cornell", max_conversations=1000)
+    # questions, answers = processor.load_dataset("daily_dialog", max_conversations=1000)
+    
+    # Prepare training data
+    encoder_inputs, decoder_inputs, decoder_targets = processor.prepare_data(questions, answers)
+    
+    print(f"Training data shape:")
+    print(f"Encoder inputs: {encoder_inputs.shape}")
+    print(f"Decoder inputs: {decoder_inputs.shape}")
+    print(f"Decoder targets: {decoder_targets.shape}")
+    
+    # Save the processor for later use
+    processor.save_processor("data_processor.pkl")
+    
+    # Example of how to use the prepared data
+    print(f"\nExample conversation:")
+    print(f"Question: {questions[0]}")
+    print(f"Answer: {answers[0]}")
+    print(f"Encoded question: {encoder_inputs[0][:10]}...")  # First 10 tokens
+    print(f"Decoded question: {processor.sequence_to_text(encoder_inputs[0])}")
