@@ -4,7 +4,7 @@ import os
 import uuid
 import matplotlib.pyplot as plt
 from datetime import datetime
-from neural_network import EncoderDecoderNN
+from neural_network import TransformerEncoderDecoder
 
 def generate_model_name():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -36,6 +36,10 @@ def train_model(encoder_inputs, decoder_inputs, decoder_targets,
 
         # Shuffle data
         indices = np.random.permutation(num_samples)
+        if xp.__name__ == "cupy":
+            # Convert indices to CuPy array for proper indexing
+            indices = xp.array(indices)
+            
         shuffled_encoder_inputs = encoder_inputs[indices]
         shuffled_decoder_inputs = decoder_inputs[indices]
         shuffled_decoder_targets = decoder_targets[indices]
@@ -47,18 +51,26 @@ def train_model(encoder_inputs, decoder_inputs, decoder_targets,
             batch_decoder_inputs = shuffled_decoder_inputs[start_idx:end_idx]
             batch_decoder_targets = shuffled_decoder_targets[start_idx:end_idx]
 
+            # Use the new transformer forward pass
             encoder_hidden, decoder_hidden, decoder_outputs = model.forward_pass(
                 batch_encoder_inputs, batch_decoder_inputs)
 
+            # Use the updated backward pass with transformer architecture
             batch_loss = model.backward_pass(
                 batch_encoder_inputs, batch_decoder_inputs, batch_decoder_targets,
                 decoder_outputs, encoder_hidden, decoder_hidden, learning_rate)
 
-            total_loss += batch_loss * (end_idx - start_idx)
-            batch_epoch_losses.append(batch_loss)
+            # Convert loss to scalar if it's a CuPy array
+            if xp.__name__ == "cupy":
+                batch_loss_scalar = float(batch_loss)
+            else:
+                batch_loss_scalar = batch_loss
+                
+            total_loss += batch_loss_scalar * (end_idx - start_idx)
+            batch_epoch_losses.append(batch_loss_scalar)
 
             if batch % 10 == 0:
-                print(f"Epoch {epoch+1}/{epochs}, Batch {batch+1}/{num_batches}, Loss: {batch_loss:.4f}")
+                print(f"Epoch {epoch+1}/{epochs}, Batch {batch+1}/{num_batches}, Loss: {batch_loss_scalar:.4f}")
 
         avg_loss = total_loss / num_samples
         epoch_time = time.time() - start_time
@@ -67,11 +79,18 @@ def train_model(encoder_inputs, decoder_inputs, decoder_targets,
         epoch_losses.append(avg_loss)
         batch_losses.append(batch_epoch_losses)
 
+        # Save model periodically
+        if (epoch + 1) % save_every == 0:
+            checkpoint_dir = os.path.join(model_dir, f'checkpoint_epoch_{epoch+1}')
+            model.save_model(checkpoint_dir)
+            print(f"Checkpoint saved at epoch {epoch+1}")
+
     # Save a single visualization for the entire training progress
     plt.figure(figsize=(10, 6))
     plt.plot(epoch_losses, marker='o', label='Epoch Loss')
     for i, batch_epoch_losses in enumerate(batch_losses):
-        plt.plot([i + (j / len(batch_epoch_losses)) for j in range(len(batch_epoch_losses))], batch_epoch_losses, alpha=0.3, color='gray')
+        plt.plot([i + (j / len(batch_epoch_losses)) for j in range(len(batch_epoch_losses))], 
+                batch_epoch_losses, alpha=0.3, color='gray')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('Training Progress: Epoch and Batch Loss')
@@ -80,7 +99,7 @@ def train_model(encoder_inputs, decoder_inputs, decoder_targets,
     plt.close()
 
     # Save raw loss data
-    np.save(os.path.join(vis_dir, 'batch_losses.npy'), np.array(batch_losses))
+    np.save(os.path.join(vis_dir, 'batch_losses.npy'), np.array(batch_losses, dtype=object))
     np.save(os.path.join(vis_dir, 'epoch_losses.npy'), np.array(epoch_losses))
 
     # Save final model

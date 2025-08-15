@@ -2,7 +2,7 @@ import argparse
 import os
 import numpy as np
 from data_processor import DataProcessor
-from neural_network import EncoderDecoderNN
+from neural_network import TransformerEncoderDecoder
 from training import train_model
 from chat import chat_interface, test_model
 
@@ -29,6 +29,8 @@ def main():
                        help='Word embedding dimension')
     parser.add_argument('--hidden_dim', type=int, default=256,
                        help='Hidden layer dimension')
+    parser.add_argument('--num_heads', type=int, default=4,
+                       help='Number of attention heads for Transformer')
     parser.add_argument('--learning_rate', type=float, default=0.01,
                        help='Learning rate')
     parser.add_argument('--use_gpu', action='store_true',
@@ -81,10 +83,11 @@ def main():
         processor.save_processor(args.processor_path)
         
         # Initialize model
-        model = EncoderDecoderNN(
+        model = TransformerEncoderDecoder(
             vocab_size=processor.vocab_size,
             embedding_dim=args.embedding_dim,
             hidden_dim=args.hidden_dim,
+            num_heads=args.num_heads,
             xp=xp
         )
         

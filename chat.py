@@ -1,5 +1,5 @@
 import numpy as np
-from neural_network import EncoderDecoderNN
+from neural_network import TransformerEncoderDecoder
 from data_processor import DataProcessor
 
 def chat_interface(model_path, processor_path):
@@ -14,7 +14,7 @@ def chat_interface(model_path, processor_path):
         Path to the saved data processor
     """
     # Load model and processor
-    model = EncoderDecoderNN.load_model(model_path)
+    model = TransformerEncoderDecoder.load_model(model_path)
     processor = DataProcessor.load_processor(processor_path)
     
     print("\n===== Chat Bot Interface =====")
@@ -59,7 +59,7 @@ def test_model(model_path, processor_path, test_questions):
         List of test questions
     """
     # Load model and processor
-    model = EncoderDecoderNN.load_model(model_path)
+    model = TransformerEncoderDecoder.load_model(model_path)
     processor = DataProcessor.load_processor(processor_path)
     
     print("\n===== Model Testing =====")
