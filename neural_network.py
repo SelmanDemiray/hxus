@@ -461,15 +461,9 @@ class TransformerEncoderDecoder:
                 if isinstance(v, np.ndarray):
                     f.create_dataset(k, data=v)
                 else:
-                    # Convert CuPy scalars to NumPy scalars for attributes
-                    if hasattr(v, 'get'):
-                        v = v.get()
-                    # Convert CuPy scalars (e.g., cupy.int32) to Python scalars
-                    if hasattr(v, 'item'):
-                        # Only call .item() if v is a scalar
-                        if hasattr(v, 'shape') and v.shape == () or (hasattr(v, 'size') and v.size == 1):
-                            v = v.item()
-                    f.attrs[k] = v
+                    # Only save small scalars as attributes
+                    if isinstance(v, (int, float, str)):
+                        f.attrs[k] = v
 
         # Save as NumPy
         np.savez(os.path.join(directory, 'model.npz'), **{k: v for k, v in model_dict.items() if isinstance(v, np.ndarray)})
